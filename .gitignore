@@ -216,3 +216,22 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project-specific
+.env
+.env.local
+data/parsed_docs.json
+vector_store/*.faiss
+vector_store/*.pkl
+vector_store/*.meta.pkl
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
