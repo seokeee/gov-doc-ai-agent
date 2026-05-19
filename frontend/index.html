@@ -1,0 +1,1180 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>공문서 AI 작성 에이전트</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Nanum+Myeongjo:wght@400;700;800&family=Noto+Sans+KR:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0a0a0a;
+    --paper: #f7f5f0;
+    --paper-2: #efebe0;
+    --line: #1a1a1a;
+    --line-soft: rgba(26, 26, 26, 0.15);
+    --accent: #8b1e1e;    /* official seal red */
+    --accent-2: #1a3a6b;  /* document-stamp blue */
+    --ok: #2d6a4f;
+    --warn: #b45309;
+    --err: #8b1e1e;
+    --info: #4b5563;
+    --serif: 'Nanum Myeongjo', 'Noto Serif KR', serif;
+    --sans: 'Noto Sans KR', -apple-system, sans-serif;
+    --mono: 'JetBrains Mono', 'D2Coding', monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  body {
+    background-image:
+      radial-gradient(circle at 20% 30%, rgba(139,30,30,0.03) 0%, transparent 40%),
+      radial-gradient(circle at 80% 70%, rgba(26,58,107,0.025) 0%, transparent 40%);
+  }
+
+  /* ─── Layout ─────────────────────────────────────────── */
+  .app {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 32px 48px 80px;
+  }
+
+  /* ─── Header ─────────────────────────────────────────── */
+  header {
+    border-top: 3px solid var(--ink);
+    border-bottom: 1px solid var(--ink);
+    padding: 28px 0 20px;
+    margin-bottom: 32px;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: end;
+    gap: 32px;
+  }
+
+  .logo-mark {
+    width: 56px;
+    height: 56px;
+    border: 2px solid var(--ink);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    background: var(--paper);
+  }
+  .logo-mark::before {
+    content: '文';
+    font-family: var(--serif);
+    font-size: 28px;
+    font-weight: 800;
+  }
+  .logo-mark::after {
+    content: '';
+    position: absolute;
+    inset: 4px;
+    border: 1px solid var(--ink);
+    pointer-events: none;
+  }
+
+  .title-block h1 {
+    font-family: var(--serif);
+    font-weight: 800;
+    font-size: 38px;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+  .title-block .subtitle {
+    font-family: var(--serif);
+    font-size: 13px;
+    color: var(--info);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .title-block .subtitle::before {
+    content: '— ';
+  }
+
+  .status-badge {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+  .status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--ok);
+    box-shadow: 0 0 0 3px rgba(45,106,79,0.2);
+  }
+  .status-dot.offline { background: var(--info); box-shadow: 0 0 0 3px rgba(75,85,99,0.15); }
+
+  /* ─── Tabs ────────────────────────────────────────────── */
+  nav.tabs {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    margin-bottom: 32px;
+    border-bottom: 1px solid var(--ink);
+  }
+  nav.tabs button {
+    background: transparent;
+    border: none;
+    border-right: 1px solid var(--line-soft);
+    padding: 16px 20px;
+    font-family: var(--serif);
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--info);
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.15s;
+    position: relative;
+  }
+  nav.tabs button:last-child { border-right: none; }
+  nav.tabs button:hover { background: var(--paper-2); }
+  nav.tabs button.active {
+    color: var(--ink);
+    background: var(--paper-2);
+  }
+  nav.tabs button.active::after {
+    content: '';
+    position: absolute;
+    bottom: -1px; left: 0; right: 0;
+    height: 3px;
+    background: var(--ink);
+  }
+  nav.tabs .tab-num {
+    display: block;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--info);
+    letter-spacing: 0.1em;
+    margin-bottom: 4px;
+  }
+
+  /* ─── Panel ──────────────────────────────────────────── */
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  .section-title {
+    font-family: var(--serif);
+    font-size: 22px;
+    font-weight: 800;
+    margin-bottom: 6px;
+    letter-spacing: -0.01em;
+  }
+  .section-sub {
+    font-size: 13px;
+    color: var(--info);
+    margin-bottom: 24px;
+    font-family: var(--serif);
+  }
+  .section-sub::before { content: '§ '; color: var(--accent); }
+
+  /* ─── Form elements ──────────────────────────────────── */
+  label {
+    display: block;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--info);
+    margin-bottom: 6px;
+  }
+  input[type="text"], input[type="number"], textarea, select {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--ink);
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 14px;
+    transition: background 0.15s;
+  }
+  input:focus, textarea:focus, select:focus {
+    outline: none;
+    background: #fff;
+    box-shadow: inset 0 0 0 2px var(--ink);
+  }
+  textarea {
+    font-family: var(--serif);
+    line-height: 1.8;
+    resize: vertical;
+    min-height: 160px;
+  }
+
+  button.primary {
+    background: var(--ink);
+    color: var(--paper);
+    border: 1px solid var(--ink);
+    padding: 12px 24px;
+    font-family: var(--serif);
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.15s;
+    letter-spacing: 0.02em;
+  }
+  button.primary:hover:not(:disabled) {
+    background: var(--paper);
+    color: var(--ink);
+  }
+  button.primary:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  button.secondary {
+    background: transparent;
+    color: var(--ink);
+    border: 1px solid var(--ink);
+    padding: 8px 16px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  button.secondary:hover { background: var(--ink); color: var(--paper); }
+
+  /* ─── Search results & Doc DB ────────────────────────── */
+  .search-bar {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .result-card, .doc-card {
+    border: 1px solid var(--ink);
+    background: var(--paper);
+    padding: 20px;
+    margin-bottom: 12px;
+    cursor: pointer;
+    transition: background 0.15s;
+    position: relative;
+  }
+  .result-card:hover, .doc-card:hover { background: var(--paper-2); }
+  .result-card.expanded, .doc-card.expanded {
+    background: var(--paper-2);
+  }
+
+  .card-head {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: start;
+    gap: 16px;
+    margin-bottom: 8px;
+  }
+  .card-title {
+    font-family: var(--serif);
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .card-meta {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 3px 8px;
+    border: 1px solid var(--ink);
+    letter-spacing: 0.05em;
+  }
+  .tag.filled { background: var(--ink); color: var(--paper); }
+  .tag.accent { background: var(--accent); color: var(--paper); border-color: var(--accent); }
+  .tag.accent2 { background: var(--accent-2); color: var(--paper); border-color: var(--accent-2); }
+
+  .score-badge {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 4px 10px;
+    background: var(--paper-2);
+    border: 1px solid var(--ink);
+    white-space: nowrap;
+  }
+  .score-badge.high { background: var(--ok); color: var(--paper); border-color: var(--ok); }
+  .score-badge.mid { background: var(--warn); color: var(--paper); border-color: var(--warn); }
+
+  .card-sub {
+    font-size: 13px;
+    color: var(--info);
+    font-family: var(--serif);
+    line-height: 1.5;
+  }
+
+  .card-body {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px dashed var(--line-soft);
+    font-family: var(--serif);
+    font-size: 13px;
+    line-height: 1.8;
+    white-space: pre-wrap;
+    color: #1a1a1a;
+  }
+  .card-body-meta {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 4px 16px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px dotted var(--line-soft);
+    font-size: 12px;
+  }
+  .card-body-meta dt {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--info);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    align-self: start;
+    padding-top: 2px;
+  }
+  .card-body-meta dd { font-family: var(--sans); }
+
+  /* ─── Draft form layout ──────────────────────────────── */
+  .form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px 20px;
+    margin-bottom: 20px;
+  }
+  .form-grid .full { grid-column: 1 / -1; }
+  .form-grid .triple { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; grid-column: 1 / -1; }
+
+  .amount-preview {
+    padding: 14px 18px;
+    border: 1px dashed var(--ink);
+    background: var(--paper-2);
+    font-family: var(--serif);
+    font-size: 15px;
+    grid-column: 1 / -1;
+  }
+  .amount-preview strong {
+    font-weight: 800;
+    font-size: 18px;
+  }
+  .amount-preview .korean {
+    color: var(--info);
+    font-size: 13px;
+    margin-left: 8px;
+  }
+
+  /* ─── Pipeline progress ──────────────────────────────── */
+  .pipeline {
+    margin-top: 28px;
+    padding: 20px;
+    border: 1px solid var(--ink);
+    background: var(--paper);
+  }
+  .pipeline-title {
+    font-family: var(--serif);
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--ink);
+  }
+  .pipeline-step {
+    display: grid;
+    grid-template-columns: 24px 1fr auto;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+    font-size: 13px;
+    font-family: var(--mono);
+    border-bottom: 1px dotted var(--line-soft);
+  }
+  .pipeline-step:last-child { border-bottom: none; }
+  .pipeline-step .icon {
+    width: 20px; height: 20px;
+    border: 1px solid var(--ink);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .pipeline-step.running .icon { background: var(--warn); color: var(--paper); }
+  .pipeline-step.done .icon { background: var(--ok); color: var(--paper); border-color: var(--ok); }
+  .pipeline-step.error .icon { background: var(--err); color: var(--paper); border-color: var(--err); }
+  .pipeline-step .elapsed {
+    font-size: 10px;
+    color: var(--info);
+    letter-spacing: 0.05em;
+  }
+
+  /* ─── Retrieved docs inline ──────────────────────────── */
+  .retrieved {
+    margin-top: 20px;
+    padding: 16px 20px;
+    border: 1px dashed var(--ink);
+    background: var(--paper-2);
+  }
+  .retrieved-title {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--info);
+    margin-bottom: 10px;
+  }
+  .retrieved-item {
+    font-family: var(--serif);
+    font-size: 13px;
+    padding: 4px 0;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 12px;
+  }
+  .retrieved-item .retrieved-score {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--info);
+  }
+
+  /* ─── Draft output (document-style) ──────────────────── */
+  .draft-output {
+    margin-top: 28px;
+    border: 1px solid var(--ink);
+    background: #fff;
+    padding: 40px 48px;
+    font-family: var(--serif);
+    font-size: 15px;
+    line-height: 1.9;
+    white-space: pre-wrap;
+    position: relative;
+    box-shadow: 8px 8px 0 var(--ink);
+  }
+  .draft-output::before {
+    content: 'DRAFT · 공문';
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    padding: 2px 8px;
+  }
+  .draft-output-textarea {
+    width: 100%;
+    border: none;
+    background: transparent;
+    font-family: var(--serif);
+    font-size: 15px;
+    line-height: 1.9;
+    min-height: 400px;
+    padding: 0;
+    resize: vertical;
+  }
+  .draft-output-textarea:focus { box-shadow: none; background: transparent; }
+
+  .draft-actions {
+    margin-top: 16px;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  /* ─── Verification results ───────────────────────────── */
+  .verify-summary {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 20px 32px;
+    padding: 20px;
+    border: 1px solid var(--ink);
+    background: var(--paper);
+    margin-bottom: 20px;
+    align-items: center;
+  }
+  .score-circle {
+    width: 96px; height: 96px;
+    border: 3px solid var(--ink);
+    border-radius: 50%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--serif);
+  }
+  .score-circle .num {
+    font-size: 32px;
+    font-weight: 800;
+    line-height: 1;
+  }
+  .score-circle .label { font-size: 11px; color: var(--info); }
+  .score-circle.high { background: var(--ok); color: var(--paper); border-color: var(--ok); }
+  .score-circle.high .label { color: rgba(255,255,255,0.8); }
+  .score-circle.mid { background: var(--warn); color: var(--paper); border-color: var(--warn); }
+  .score-circle.mid .label { color: rgba(255,255,255,0.8); }
+  .score-circle.low { background: var(--err); color: var(--paper); border-color: var(--err); }
+  .score-circle.low .label { color: rgba(255,255,255,0.8); }
+
+  .verify-stats { display: flex; gap: 32px; flex-wrap: wrap; }
+  .verify-stat {
+    font-family: var(--serif);
+  }
+  .verify-stat .val { font-size: 28px; font-weight: 800; line-height: 1; }
+  .verify-stat .lbl {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--info);
+    margin-top: 4px;
+  }
+
+  .issue {
+    border-left: 3px solid var(--info);
+    padding: 12px 16px;
+    margin-bottom: 8px;
+    background: var(--paper-2);
+  }
+  .issue.error { border-left-color: var(--err); }
+  .issue.warning { border-left-color: var(--warn); }
+  .issue.info { border-left-color: var(--info); }
+  .issue-head {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--info);
+    margin-bottom: 4px;
+  }
+  .issue.error .issue-head { color: var(--err); }
+  .issue.warning .issue-head { color: var(--warn); }
+  .issue-body {
+    font-family: var(--serif);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .issue-detail {
+    margin-top: 6px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--info);
+  }
+  .issue-detail code {
+    background: var(--ink);
+    color: var(--paper);
+    padding: 1px 6px;
+    font-size: 11px;
+  }
+  .issue-detail code.fix { background: var(--ok); }
+
+  /* ─── Empty / loading states ─────────────────────────── */
+  .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--info);
+    font-family: var(--serif);
+    font-size: 14px;
+  }
+  .empty-state::before {
+    content: '✧';
+    display: block;
+    font-size: 32px;
+    margin-bottom: 12px;
+    color: var(--accent);
+  }
+
+  .loading {
+    display: inline-block;
+    width: 12px; height: 12px;
+    border: 2px solid var(--paper-2);
+    border-top-color: var(--ink);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ─── Footer ─────────────────────────────────────────── */
+  footer {
+    margin-top: 64px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line-soft);
+    text-align: center;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    color: var(--info);
+  }
+  footer strong { color: var(--ink); }
+
+  @media (max-width: 768px) {
+    .app { padding: 20px 24px 40px; }
+    header { grid-template-columns: auto 1fr; }
+    .status-badge { grid-column: 1 / -1; align-items: flex-start; flex-direction: row; flex-wrap: wrap; gap: 16px; }
+    .form-grid, .triple { grid-template-columns: 1fr; }
+    nav.tabs { grid-template-columns: 1fr 1fr; }
+    nav.tabs button { border-bottom: 1px solid var(--line-soft); }
+    .draft-output { padding: 24px 20px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ─── Header ─── -->
+  <header>
+    <div class="logo-mark"></div>
+    <div class="title-block">
+      <h1>공문서 AI 작성 에이전트</h1>
+      <div class="subtitle">RAG-based Administrative Document Drafting System · Phase 2 Prototype</div>
+    </div>
+    <div class="status-badge" id="statusBadge">
+      <div class="status-row">
+        <span class="status-dot offline" id="healthDot"></span>
+        <span id="healthText">연결 확인 중…</span>
+      </div>
+      <div class="status-row" id="backendInfo" style="color: var(--info);">—</div>
+    </div>
+  </header>
+
+  <!-- ─── Tabs ─── -->
+  <nav class="tabs">
+    <button class="active" data-tab="search">
+      <span class="tab-num">STEP 01</span>유사 문서 검색
+    </button>
+    <button data-tab="draft">
+      <span class="tab-num">STEP 02</span>초안 생성
+    </button>
+    <button data-tab="verify">
+      <span class="tab-num">STEP 03</span>자동 검증
+    </button>
+    <button data-tab="db">
+      <span class="tab-num">DATA</span>문서 DB
+    </button>
+  </nav>
+
+  <!-- ─── Panel: Search ─── -->
+  <section class="panel active" id="panel-search">
+    <h2 class="section-title">유사 문서 검색</h2>
+    <p class="section-sub">벡터 임베딩 기반 의미 검색과 키워드 부스팅을 결합한 하이브리드 검색</p>
+
+    <div class="search-bar">
+      <input type="text" id="searchInput" placeholder='"자문회의 비용"  "식대"  "인쇄비"  "빅데이터 분석"  등을 입력'>
+      <button class="primary" id="searchBtn">검 색</button>
+    </div>
+    <div id="searchResults"></div>
+  </section>
+
+  <!-- ─── Panel: Draft ─── -->
+  <section class="panel" id="panel-draft">
+    <h2 class="section-title">공문 초안 생성</h2>
+    <p class="section-sub">RAG · 유사 문서 검색 → LLM 초안 생성 → 자동 검증까지 파이프라인 실행</p>
+
+    <div class="form-grid">
+      <div>
+        <label>문서 유형</label>
+        <select id="draftType">
+          <option>회의비 지출(식대)</option>
+          <option>자문회의 비용 지출</option>
+          <option>세미나 비용 지출</option>
+          <option>인쇄비용 지출</option>
+          <option>검증수수료 지출</option>
+          <option>출장비 지출</option>
+        </select>
+      </div>
+      <div>
+        <label>지급방법</label>
+        <select id="draftPayment">
+          <option>카드결제</option>
+          <option>계좌이체</option>
+          <option>청구에 의한 계좌이체</option>
+        </select>
+      </div>
+      <div class="full">
+        <label>주요 내용 / 목적</label>
+        <input type="text" id="draftPurpose" placeholder="예) 빅데이터 분석 킥오프 미팅">
+      </div>
+      <div>
+        <label>일시</label>
+        <input type="text" id="draftDate" placeholder="2026.1.20.(화) 12:00">
+      </div>
+      <div>
+        <label>장소</label>
+        <input type="text" id="draftLocation" placeholder="연구원 3층 회의실">
+      </div>
+      <div class="full">
+        <label>참석자</label>
+        <input type="text" id="draftParticipants" placeholder="홍길동(울산시), 김상락, 이상일(URI)">
+      </div>
+      <div class="triple">
+        <div>
+          <label>참석 인원 (명)</label>
+          <input type="number" id="draftCount" placeholder="8">
+        </div>
+        <div>
+          <label>1인당 단가 (원)</label>
+          <input type="number" id="draftUnit" placeholder="25000">
+        </div>
+        <div>
+          <label>프로젝트</label>
+          <input type="text" id="draftProject" value="2025년 울산 빅데이터센터 운영">
+        </div>
+      </div>
+      <div class="amount-preview" id="amountPreview" style="display: none;">
+        산출 총액 : <strong id="amountTotal">0원</strong><span class="korean" id="amountKorean"></span>
+      </div>
+    </div>
+
+    <button class="primary" id="generateBtn">◉ &nbsp;초 안 &nbsp;생 성 &nbsp;실 행</button>
+
+    <div id="pipeline"></div>
+    <div id="retrieved"></div>
+    <div id="draftOutputWrapper"></div>
+  </section>
+
+  <!-- ─── Panel: Verify ─── -->
+  <section class="panel" id="panel-verify">
+    <h2 class="section-title">문서 자동 검증</h2>
+    <p class="section-sub">맞춤법 · 행정 용어 · 필수 항목 · 수치 정합성 · 산출기초 계산 검사</p>
+
+    <label>검증할 문서 텍스트</label>
+    <textarea id="verifyText" placeholder="공문 초안 텍스트를 붙여넣으세요…"></textarea>
+
+    <div class="form-grid" style="margin-top: 16px;">
+      <div class="triple">
+        <div>
+          <label>기대 금액(원) · 선택</label>
+          <input type="number" id="verifyAmount" placeholder="200000">
+        </div>
+        <div>
+          <label>기대 인원 · 선택</label>
+          <input type="number" id="verifyCount" placeholder="8">
+        </div>
+        <div>
+          <label>기대 단가(원) · 선택</label>
+          <input type="number" id="verifyUnit" placeholder="25000">
+        </div>
+      </div>
+    </div>
+
+    <button class="primary" id="verifyBtn" style="margin-top: 12px;">◉ &nbsp;검 증 &nbsp;실 행</button>
+
+    <div id="verifyResults" style="margin-top: 28px;"></div>
+  </section>
+
+  <!-- ─── Panel: Document DB ─── -->
+  <section class="panel" id="panel-db">
+    <h2 class="section-title">학습된 문서 데이터베이스</h2>
+    <p class="section-sub">OCR 추출 → 메타데이터 파싱 → 벡터 인덱싱 완료</p>
+
+    <div style="margin-bottom: 16px;">
+      <button class="secondary" id="reingestBtn">↻ 재인덱싱 실행</button>
+      <span id="ingestStatus" style="margin-left: 12px; font-family: var(--mono); font-size: 11px; color: var(--info);"></span>
+    </div>
+
+    <div id="docList"></div>
+  </section>
+
+  <!-- ─── Footer ─── -->
+  <footer>
+    <strong>PHASE 2 PROTOTYPE</strong> ·  PYMUPDF · TESSERACT OCR(KOR) · SENTENCE-TRANSFORMERS / TFIDF FALLBACK · FAISS · CLAUDE API
+  </footer>
+</div>
+
+<script>
+// ─── API Client ────────────────────────────────────────
+const API = window.location.origin;
+
+async function api(path, options = {}) {
+  const res = await fetch(`${API}${path}`, {
+    headers: { 'Content-Type': 'application/json' },
+    ...options,
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`${res.status}: ${err}`);
+  }
+  return res.json();
+}
+
+// ─── Tab switching ─────────────────────────────────────
+document.querySelectorAll('nav.tabs button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('nav.tabs button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById(`panel-${btn.dataset.tab}`).classList.add('active');
+  });
+});
+
+// ─── Health check ──────────────────────────────────────
+async function checkHealth() {
+  try {
+    const h = await api('/api/health');
+    document.getElementById('healthDot').classList.toggle('offline', !h.ingested);
+    document.getElementById('healthText').textContent =
+      h.ingested ? `연결됨 · ${h.document_count}개 문서` : '인덱스 없음';
+    const llm = h.llm_available ? `LLM: ${h.llm_model}` : 'LLM: 템플릿 fallback';
+    document.getElementById('backendInfo').textContent = `BACKEND: ${h.vector_backend} · ${llm}`;
+  } catch (e) {
+    document.getElementById('healthText').textContent = '서버 연결 실패';
+  }
+}
+checkHealth();
+
+// ─── Korean number formatter (client-side mirror of server) ──
+function numToKorean(num) {
+  num = parseInt(num);
+  if (!num) return '';
+  const units = ['', '만', '억', '조'];
+  const digits = ['', '일', '이', '삼', '사', '오', '육', '칠', '팔', '구'];
+  const sub = ['', '십', '백', '천'];
+  let result = '', u = 0;
+  while (num > 0) {
+    const chunk = num % 10000;
+    if (chunk > 0) {
+      let s = '', c = chunk;
+      for (let i = 0; i < 4 && c > 0; i++) {
+        const d = c % 10;
+        if (d > 0) {
+          const prefix = (d === 1 && i === 1) ? '' : digits[d];
+          s = prefix + sub[i] + s;
+        }
+        c = Math.floor(c / 10);
+      }
+      result = s + units[u] + result;
+    }
+    num = Math.floor(num / 10000);
+    u++;
+  }
+  return '금' + result + '원';
+}
+
+// ─── Live amount preview ───────────────────────────────
+function updateAmount() {
+  const count = parseInt(document.getElementById('draftCount').value) || 0;
+  const unit = parseInt(document.getElementById('draftUnit').value) || 0;
+  const total = count * unit;
+  const preview = document.getElementById('amountPreview');
+  if (total > 0) {
+    preview.style.display = 'block';
+    document.getElementById('amountTotal').textContent = total.toLocaleString() + '원';
+    document.getElementById('amountKorean').textContent = `(${numToKorean(total)})`;
+  } else {
+    preview.style.display = 'none';
+  }
+}
+['draftCount', 'draftUnit'].forEach(id => {
+  document.getElementById(id).addEventListener('input', updateAmount);
+});
+
+// ─── Search tab ────────────────────────────────────────
+function escapeHTML(s) {
+  return String(s || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+
+function renderSearchResult(r, i) {
+  const score = r.hybrid_score || r.score;
+  const scoreClass = score > 0.5 ? 'high' : score > 0.2 ? 'mid' : '';
+  return `
+    <div class="result-card" data-idx="${i}">
+      <div class="card-head">
+        <div>
+          <div class="card-meta" style="margin-bottom: 8px;">
+            <span class="tag filled">${escapeHTML(r.doc_type)}</span>
+            <span class="tag">${escapeHTML(r.filename)}</span>
+          </div>
+          <div class="card-title">${escapeHTML(r.title || '(제목 없음)')}</div>
+          <div class="card-sub">${escapeHTML(r.purpose || '')} · ${escapeHTML(r.amount || '')} · ${escapeHTML(r.date || '일시 없음')}</div>
+        </div>
+        <div class="score-badge ${scoreClass}">SIM ${(score * 100).toFixed(1)}%</div>
+      </div>
+      <div class="card-body" style="display: none;">${escapeHTML(r.raw_text || r.summary || '')}</div>
+    </div>
+  `;
+}
+
+document.getElementById('searchBtn').addEventListener('click', async () => {
+  const q = document.getElementById('searchInput').value.trim();
+  const target = document.getElementById('searchResults');
+  if (!q) return;
+  target.innerHTML = '<div class="empty-state"><span class="loading"></span> 검색 중…</div>';
+  try {
+    const data = await api('/api/search', {
+      method: 'POST',
+      body: JSON.stringify({ query: q, top_k: 5 }),
+    });
+    if (!data.results.length) {
+      target.innerHTML = '<div class="empty-state">일치하는 문서가 없습니다.</div>';
+      return;
+    }
+    target.innerHTML = `<div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; color: var(--info); margin-bottom: 16px;">
+      ${data.count}건 · BACKEND: ${data.backend.toUpperCase()}
+    </div>` + data.results.map(renderSearchResult).join('');
+
+    // Expand on click
+    target.querySelectorAll('.result-card').forEach(card => {
+      card.addEventListener('click', () => {
+        card.classList.toggle('expanded');
+        const body = card.querySelector('.card-body');
+        body.style.display = card.classList.contains('expanded') ? 'block' : 'none';
+      });
+    });
+  } catch (e) {
+    target.innerHTML = `<div class="empty-state" style="color: var(--err);">에러: ${escapeHTML(e.message)}</div>`;
+  }
+});
+
+document.getElementById('searchInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('searchBtn').click();
+});
+
+// ─── Draft generation ─────────────────────────────────
+function renderPipelineStep(step) {
+  const statusClass = step.status || 'done';
+  const icon = statusClass === 'running' ? '…' : statusClass === 'done' ? '✓' : '✗';
+  const elapsed = step.elapsed !== undefined ? `${step.elapsed}s` : (step.elapsed_sec ? `${step.elapsed_sec}s` : '');
+  return `
+    <div class="pipeline-step ${statusClass}">
+      <div class="icon">${icon}</div>
+      <div>${escapeHTML(step.name || step.stage)}${step.message ? ` · ${escapeHTML(step.message)}` : ''}</div>
+      <div class="elapsed">${elapsed}</div>
+    </div>
+  `;
+}
+
+document.getElementById('generateBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('generateBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="loading"></span> &nbsp;생 성 &nbsp;중…';
+
+  const payload = {
+    doc_type: document.getElementById('draftType').value,
+    user_input: {
+      purpose: document.getElementById('draftPurpose').value,
+      date: document.getElementById('draftDate').value,
+      location: document.getElementById('draftLocation').value,
+      participants: document.getElementById('draftParticipants').value,
+      participant_count: parseInt(document.getElementById('draftCount').value) || null,
+      unit_cost: parseInt(document.getElementById('draftUnit').value) || null,
+      payment_method: document.getElementById('draftPayment').value,
+      project: document.getElementById('draftProject').value,
+    },
+    top_k: 3,
+    verify: true,
+  };
+
+  const pipeline = document.getElementById('pipeline');
+  const retrieved = document.getElementById('retrieved');
+  const draftWrapper = document.getElementById('draftOutputWrapper');
+  pipeline.innerHTML = '';
+  retrieved.innerHTML = '';
+  draftWrapper.innerHTML = '';
+
+  try {
+    const data = await api('/api/generate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+
+    // Pipeline
+    pipeline.innerHTML = `
+      <div class="pipeline">
+        <div class="pipeline-title">PIPELINE EXECUTION LOG</div>
+        ${data.steps.map(s => renderPipelineStep({...s, status: 'done'})).join('')}
+      </div>
+    `;
+
+    // Retrieved
+    const retrievedDocs = data.steps[0].retrieved || [];
+    if (retrievedDocs.length) {
+      retrieved.innerHTML = `
+        <div class="retrieved">
+          <div class="retrieved-title">RETRIEVED CONTEXT · RAG 입력 문서</div>
+          ${retrievedDocs.map(d => `
+            <div class="retrieved-item">
+              <span>▸ ${escapeHTML(d.filename)} — ${escapeHTML(d.title || d.doc_type)}</span>
+              <span class="retrieved-score">${(d.hybrid_score * 100).toFixed(1)}%</span>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    // Draft
+    draftWrapper.innerHTML = `
+      <div class="draft-output">
+        <textarea class="draft-output-textarea" id="draftEditor">${escapeHTML(data.draft)}</textarea>
+      </div>
+      <div class="draft-actions">
+        <button class="secondary" id="copyBtn">CLIPBOARD로 복사</button>
+        <button class="secondary" id="toVerifyBtn">↗ 검증 탭으로 전송</button>
+        ${data.verification ? `<span style="align-self: center; font-family: var(--mono); font-size: 11px; color: var(--info);">
+          검증 점수: <strong style="color: var(--ink);">${data.verification.score}/100</strong> ·
+          이슈 ${data.verification.summary.total}건
+          (오류 ${data.verification.summary.errors} · 경고 ${data.verification.summary.warnings} · 안내 ${data.verification.summary.info})
+        </span>` : ''}
+      </div>
+    `;
+
+    document.getElementById('copyBtn').addEventListener('click', () => {
+      navigator.clipboard.writeText(document.getElementById('draftEditor').value);
+      document.getElementById('copyBtn').textContent = '✓ 복사됨';
+      setTimeout(() => { document.getElementById('copyBtn').textContent = 'CLIPBOARD로 복사'; }, 1500);
+    });
+    document.getElementById('toVerifyBtn').addEventListener('click', () => {
+      document.getElementById('verifyText').value = document.getElementById('draftEditor').value;
+      if (payload.user_input.participant_count)
+        document.getElementById('verifyCount').value = payload.user_input.participant_count;
+      if (payload.user_input.unit_cost)
+        document.getElementById('verifyUnit').value = payload.user_input.unit_cost;
+      if (data.total_amount)
+        document.getElementById('verifyAmount').value = data.total_amount;
+      // switch tab
+      document.querySelector('[data-tab="verify"]').click();
+    });
+  } catch (e) {
+    draftWrapper.innerHTML = `<div class="empty-state" style="color: var(--err);">에러: ${escapeHTML(e.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '◉ &nbsp;초 안 &nbsp;생 성 &nbsp;실 행';
+  }
+});
+
+// ─── Verification ──────────────────────────────────────
+document.getElementById('verifyBtn').addEventListener('click', async () => {
+  const text = document.getElementById('verifyText').value.trim();
+  const target = document.getElementById('verifyResults');
+  if (!text) {
+    target.innerHTML = '<div class="empty-state">검증할 텍스트를 입력하세요.</div>';
+    return;
+  }
+  target.innerHTML = '<div class="empty-state"><span class="loading"></span> 검증 중…</div>';
+  try {
+    const data = await api('/api/verify', {
+      method: 'POST',
+      body: JSON.stringify({
+        text,
+        expected_amount: parseInt(document.getElementById('verifyAmount').value) || null,
+        expected_participant_count: parseInt(document.getElementById('verifyCount').value) || null,
+        expected_unit_cost: parseInt(document.getElementById('verifyUnit').value) || null,
+      }),
+    });
+    const scoreClass = data.score >= 80 ? 'high' : data.score >= 50 ? 'mid' : 'low';
+    target.innerHTML = `
+      <div class="verify-summary">
+        <div class="score-circle ${scoreClass}">
+          <div class="num">${data.score}</div>
+          <div class="label">SCORE · 100</div>
+        </div>
+        <div class="verify-stats">
+          <div class="verify-stat"><div class="val">${data.summary.errors}</div><div class="lbl">ERRORS</div></div>
+          <div class="verify-stat"><div class="val">${data.summary.warnings}</div><div class="lbl">WARNINGS</div></div>
+          <div class="verify-stat"><div class="val">${data.summary.info}</div><div class="lbl">NOTICES</div></div>
+          <div class="verify-stat"><div class="val">${data.passed ? 'PASS' : 'FAIL'}</div><div class="lbl">STATUS</div></div>
+        </div>
+      </div>
+      ${data.issues.length ? data.issues.map(i => `
+        <div class="issue ${i.severity}">
+          <div class="issue-head">[${i.severity.toUpperCase()}] ${escapeHTML(i.type)}</div>
+          <div class="issue-body">${escapeHTML(i.description)}</div>
+          ${i.found || i.suggestion ? `
+            <div class="issue-detail">
+              ${i.found ? `발견: <code>${escapeHTML(i.found)}</code>` : ''}
+              ${i.suggestion ? `&nbsp;→&nbsp;제안: <code class="fix">${escapeHTML(i.suggestion)}</code>` : ''}
+            </div>
+          ` : ''}
+        </div>
+      `).join('') : '<div class="empty-state" style="color: var(--ok);">✓ 발견된 문제 없음</div>'}
+    `;
+  } catch (e) {
+    target.innerHTML = `<div class="empty-state" style="color: var(--err);">에러: ${escapeHTML(e.message)}</div>`;
+  }
+});
+
+// ─── Document DB ───────────────────────────────────────
+async function loadDocs() {
+  const target = document.getElementById('docList');
+  target.innerHTML = '<div class="empty-state"><span class="loading"></span> 로딩…</div>';
+  try {
+    const data = await api('/api/documents');
+    if (!data.count) {
+      target.innerHTML = '<div class="empty-state">인덱싱된 문서가 없습니다. [재인덱싱 실행]을 눌러주세요.</div>';
+      return;
+    }
+    target.innerHTML = `<div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; color: var(--info); margin-bottom: 16px;">
+      TOTAL ${data.count} DOCUMENTS · PROJECT: 2025 울산 빅데이터센터 운영
+    </div>` + data.documents.map((d, i) => `
+      <div class="doc-card" data-idx="${i}">
+        <div class="card-head">
+          <div>
+            <div class="card-meta" style="margin-bottom: 8px;">
+              <span class="tag filled">${escapeHTML(d.doc_type)}</span>
+              <span class="tag">${escapeHTML(d.filename)}</span>
+              <span class="tag ${d.extraction_method === 'ocr' ? 'accent' : 'accent2'}">
+                ${(d.extraction_method || 'ocr').toUpperCase()}
+              </span>
+            </div>
+            <div class="card-title">${escapeHTML(d.title || '(제목 미추출)')}</div>
+            <div class="card-sub">${escapeHTML(d.purpose || '')} · ${escapeHTML(d.date || '일시 없음')}</div>
+          </div>
+          <div class="score-badge">${escapeHTML(d.amount_text || '')}</div>
+        </div>
+        <dl class="card-body-meta" style="display: none;">
+          <dt>DOC NO.</dt><dd>${escapeHTML(d.doc_number || '—')}</dd>
+          <dt>PROJECT</dt><dd>${escapeHTML(d.project_name || '—')}</dd>
+          <dt>LOCATION</dt><dd>${escapeHTML(d.location || '—')}</dd>
+          <dt>PAYMENT</dt><dd>${escapeHTML(d.payment_method || '—')}</dd>
+          <dt>PAYEE</dt><dd>${escapeHTML(d.payee || '—')}</dd>
+          <dt>BUDGET</dt><dd>${escapeHTML(d.budget_category || '—')}</dd>
+        </dl>
+      </div>
+    `).join('');
+
+    target.querySelectorAll('.doc-card').forEach(card => {
+      card.addEventListener('click', () => {
+        card.classList.toggle('expanded');
+        const meta = card.querySelector('.card-body-meta');
+        if (meta) meta.style.display = card.classList.contains('expanded') ? 'grid' : 'none';
+      });
+    });
+  } catch (e) {
+    target.innerHTML = `<div class="empty-state" style="color: var(--err);">에러: ${escapeHTML(e.message)}</div>`;
+  }
+}
+loadDocs();
+
+document.getElementById('reingestBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('reingestBtn');
+  const status = document.getElementById('ingestStatus');
+  btn.disabled = true;
+  status.textContent = '⟳ 재인덱싱 중… (OCR 처리에 수분 소요)';
+  try {
+    const data = await api('/api/ingest', { method: 'POST' });
+    status.textContent = `✓ ${data.pdfs_processed}개 문서 · ${data.elapsed_sec}s`;
+    await loadDocs();
+    await checkHealth();
+  } catch (e) {
+    status.textContent = `✗ 에러: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
