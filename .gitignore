@@ -235,3 +235,10 @@ Thumbs.db
 
 # Logs
 *.log
+ 
+# PDF source files (contains real names ? never commit) 
+data/*.pdf 
+pdfs/*.pdf 
+vector_store/*.faiss 
+vector_store/*.pkl 
+vector_store/*.meta.pkl 
