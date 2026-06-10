@@ -1,30 +1,49 @@
 """
-Module 4: LLM Client (Gemini)
-- Google Gemini API wrapper for draft generation
-- RAG: injects retrieved documents as context
-- Uses gemini-2.0-flash by default
-- Requires GOOGLE_API_KEY env var (set via .env file)
+Module 4: LLM Client (v2)
+=========================
+Google Gemini API wrapper for RAG-based draft generation.
+
+v2 upgrades:
+- New `google-genai` SDK (replaces deprecated `google-generativeai`)
+- Model fallback chain: tries multiple models when quota/availability fails
+- Retry with exponential backoff on transient errors (429, 5xx)
+- Truncation detection via finish_reason -> `truncated` flag in result
+- Input validation: rejects empty/insufficient user input early
+- Backward-compatible interface (agent.py / api_server.py unchanged)
+
+Env vars (.env supported):
+- GOOGLE_API_KEY   : required for LLM generation
+- GEMINI_MODEL     : optional, overrides the default model chain head
 """
 
 import os
+import time
 from typing import List, Dict, Optional
 
-# Load .env file if present (optional, dotenv may not be installed)
+# Load .env file if present
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
 
+# New SDK: google-genai  (pip install google-genai)
 try:
-    import google.generativeai as genai
-    _GEMINI_AVAILABLE = True
+    from google import genai
+    from google.genai import types as genai_types
+    from google.genai import errors as genai_errors
+    _GENAI_AVAILABLE = True
 except ImportError:
-    _GEMINI_AVAILABLE = False
+    _GENAI_AVAILABLE = False
 
 
 def number_to_korean(num: int) -> str:
-    """Convert integer to Korean number text (e.g., 225000 -> '금이십이만오천원')."""
+    """Convert integer to Korean number text (e.g., 225000 -> '금이십이만오천원').
+
+    Korean gov-doc convention:
+    - '일십' is abbreviated to '십'
+    - '일백', '일천' are kept (e.g. 1,040,000 -> 금일백사만원)
+    """
     if num == 0:
         return "금영원"
     units = ["", "만", "억", "조"]
@@ -43,9 +62,7 @@ def number_to_korean(num: int) -> str:
                     break
                 d = c % 10
                 if d > 0:
-                    # Korean gov doc style: "일십" is abbreviated to "십",
-                    # but "일백", "일천" are typically kept (e.g. 금일백사만원)
-                    if d == 1 and i == 1:  # 십 position
+                    if d == 1 and i == 1:  # 십 position only
                         prefix = ""
                     else:
                         prefix = digits[d]
@@ -58,28 +75,49 @@ def number_to_korean(num: int) -> str:
 
 
 class LLMClient:
-    """Google Gemini API client with RAG-style prompt construction."""
+    """Gemini client with model fallback chain + retry + truncation detection."""
 
-    DEFAULT_MODEL = "gemini-2.0-flash"
-    MAX_OUTPUT_TOKENS = 1500
+    # Tried in order until one succeeds. Head can be overridden via GEMINI_MODEL.
+    MODEL_CHAIN = [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+    ]
+    MAX_OUTPUT_TOKENS = 4500
+    TEMPERATURE = 0.4
+    MAX_RETRIES = 2          # per model, on transient errors
+    RETRY_BASE_DELAY = 2.0   # seconds; doubles each retry
+
+    # Minimum fields required to generate a meaningful draft
+    REQUIRED_FIELDS = ["purpose", "date"]
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
-        self.model_name = model or self.DEFAULT_MODEL
+
+        # Build the model chain: explicit arg > env var > default chain
+        env_model = os.getenv("GEMINI_MODEL")
+        head = model or env_model
+        if head:
+            # Put requested model first, keep the rest as fallback
+            chain = [head] + [m for m in self.MODEL_CHAIN if m != head]
+        else:
+            chain = list(self.MODEL_CHAIN)
+        self.model_chain = chain
+
+        # The model that most recently succeeded (starts as chain head)
+        self.model_name = self.model_chain[0]
+        self.model = self.model_name  # alias for backward compatibility
+
         self.client = None
-        if _GEMINI_AVAILABLE and self.api_key:
-            genai.configure(api_key=self.api_key)
-            self.client = genai.GenerativeModel(
-                model_name=self.model_name,
-                generation_config={
-                    "max_output_tokens": self.MAX_OUTPUT_TOKENS,
-                    "temperature": 0.4,
-                },
-            )
+        if _GENAI_AVAILABLE and self.api_key:
+            self.client = genai.Client(api_key=self.api_key)
 
     def is_available(self) -> bool:
         return self.client is not None
 
+    # ──────────────────────────────────────────────────────────────
+    # Public API
+    # ──────────────────────────────────────────────────────────────
     def generate_draft(
         self,
         doc_type: str,
@@ -89,31 +127,138 @@ class LLMClient:
         """
         Generate a 공문 draft using RAG context.
 
-        Args:
-            doc_type: 문서 유형 (e.g., '회의비 지출(식대)')
-            user_input: dict with keys like purpose, date, location, participants,
-                        participant_count, unit_cost, payment_method, project
-            retrieved_docs: list of similar docs (with 'doc' + 'score' keys)
-
-        Returns:
-            dict with 'draft', 'model', 'retrieved_ids', 'fallback' flag
+        Returns dict:
+            draft          : generated text
+            model          : model actually used ('template-fallback' if LLM unused)
+            retrieved_ids  : filenames of RAG context docs
+            fallback       : True if template fallback was used
+            truncated      : True if output hit token limit (LLM only)
+            total_amount   : computed amount (int)
+            korean_amount  : Korean text amount
+            error          : error message if LLM failed (optional)
+            warnings       : list of validation warnings (optional)
         """
         total_amount = self._compute_total(user_input)
         korean_amount = number_to_korean(total_amount) if total_amount else ""
 
+        # ── Input validation ──
+        validation_warnings = self._validate_input(doc_type, user_input)
+
+        # ── No API -> template fallback ──
         if not self.is_available():
-            # Template-based fallback when API is unavailable
             draft = self._template_fallback(doc_type, user_input, total_amount, korean_amount)
             return {
                 "draft": draft,
                 "model": "template-fallback",
                 "retrieved_ids": [d["doc"].get("filename", "") for d in retrieved_docs],
                 "fallback": True,
+                "truncated": False,
                 "total_amount": total_amount,
                 "korean_amount": korean_amount,
+                "warnings": validation_warnings,
             }
 
-        # Build RAG context from retrieved docs
+        prompt = self._build_prompt(doc_type, user_input, retrieved_docs,
+                                    total_amount, korean_amount)
+
+        # ── Model fallback chain with retry ──
+        last_error = None
+        for model_name in self.model_chain:
+            result = self._try_model(model_name, prompt)
+            if result is not None:
+                draft_text, truncated = result
+                self.model_name = model_name
+                self.model = model_name
+                return {
+                    "draft": draft_text,
+                    "model": model_name,
+                    "retrieved_ids": [d["doc"].get("filename", "") for d in retrieved_docs],
+                    "fallback": False,
+                    "truncated": truncated,
+                    "total_amount": total_amount,
+                    "korean_amount": korean_amount,
+                    "warnings": validation_warnings,
+                }
+            last_error = self._last_error
+
+        # ── All models failed -> template fallback ──
+        print(f"[LLM] All models failed ({last_error}). Falling back to template.")
+        draft = self._template_fallback(doc_type, user_input, total_amount, korean_amount)
+        return {
+            "draft": draft,
+            "model": "template-fallback (API error)",
+            "retrieved_ids": [d["doc"].get("filename", "") for d in retrieved_docs],
+            "fallback": True,
+            "truncated": False,
+            "total_amount": total_amount,
+            "korean_amount": korean_amount,
+            "error": str(last_error),
+            "warnings": validation_warnings,
+        }
+
+    # ──────────────────────────────────────────────────────────────
+    # Internal: model call with retry
+    # ──────────────────────────────────────────────────────────────
+    def _try_model(self, model_name: str, prompt: str):
+        """Try one model with retries. Returns (text, truncated) or None."""
+        self._last_error = None
+        for attempt in range(self.MAX_RETRIES + 1):
+            try:
+                response = self.client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=genai_types.GenerateContentConfig(
+                        max_output_tokens=self.MAX_OUTPUT_TOKENS,
+                        temperature=self.TEMPERATURE,
+                    ),
+                )
+
+                text = response.text or ""
+                if not text.strip():
+                    self._last_error = f"{model_name}: empty response"
+                    return None
+
+                # Truncation detection
+                truncated = False
+                try:
+                    fr = response.candidates[0].finish_reason
+                    truncated = (str(fr).upper().find("MAX_TOKENS") >= 0)
+                except (IndexError, AttributeError):
+                    pass
+
+                if truncated:
+                    print(f"[LLM] WARNING: {model_name} output hit token limit "
+                          f"({self.MAX_OUTPUT_TOKENS}). Draft may be incomplete.")
+                return (text, truncated)
+
+            except genai_errors.APIError as e:
+                code = getattr(e, "code", None)
+                self._last_error = f"{model_name}: {code} {e}"
+                # 429 = quota; retry with backoff, then move to next model
+                if code == 429 and attempt < self.MAX_RETRIES:
+                    delay = self.RETRY_BASE_DELAY * (2 ** attempt)
+                    print(f"[LLM] {model_name} rate-limited. Retry in {delay:.0f}s "
+                          f"({attempt + 1}/{self.MAX_RETRIES})")
+                    time.sleep(delay)
+                    continue
+                # 5xx transient errors: retry once
+                if code is not None and 500 <= int(code) < 600 and attempt < self.MAX_RETRIES:
+                    time.sleep(self.RETRY_BASE_DELAY)
+                    continue
+                # 404 (model not found), persistent 429 etc -> next model in chain
+                print(f"[LLM] {model_name} failed: {self._last_error}. Trying next model.")
+                return None
+            except Exception as e:
+                self._last_error = f"{model_name}: {e}"
+                print(f"[LLM] {model_name} unexpected error: {e}. Trying next model.")
+                return None
+        return None
+
+    # ──────────────────────────────────────────────────────────────
+    # Internal: prompt construction
+    # ──────────────────────────────────────────────────────────────
+    def _build_prompt(self, doc_type, user_input, retrieved_docs,
+                      total_amount, korean_amount) -> str:
         context_blocks = []
         for i, r in enumerate(retrieved_docs, 1):
             d = r["doc"]
@@ -124,12 +269,11 @@ class LLMClient:
                 f"제목: {d.get('title', '')}\n"
                 f"본문:\n{d.get('raw_text', '')[:1500]}"
             )
-        context = "\n\n---\n\n".join(context_blocks)
+        context = "\n\n---\n\n".join(context_blocks) if context_blocks else "(참고 문서 없음)"
 
-        # Build user input summary
         input_summary = self._format_input(user_input, total_amount, korean_amount)
 
-        prompt = f"""당신은 울산연구원(URI) 공문서 작성 보조 AI입니다.
+        return f"""당신은 울산연구원(URI) 공문서 작성 보조 AI입니다.
 아래 [참고 문서]의 서식과 표현을 최대한 참고하여 [입력 정보]에 맞는 공문 초안을 작성하세요.
 
 [참고 문서]
@@ -150,34 +294,24 @@ class LLMClient:
 
 초안을 작성하세요:"""
 
-        try:
-            response = self.client.generate_content(prompt)
-            draft_text = response.text
-        except Exception as e:
-            # If API call fails (rate limit, network, etc.), fall back to template
-            print(f"[LLM] Gemini API error: {e}. Falling back to template.")
-            draft = self._template_fallback(doc_type, user_input, total_amount, korean_amount)
-            return {
-                "draft": draft,
-                "model": "template-fallback (API error)",
-                "retrieved_ids": [d["doc"].get("filename", "") for d in retrieved_docs],
-                "fallback": True,
-                "total_amount": total_amount,
-                "korean_amount": korean_amount,
-                "error": str(e),
-            }
-
-        return {
-            "draft": draft_text,
-            "model": self.model_name,
-            "retrieved_ids": [d["doc"].get("filename", "") for d in retrieved_docs],
-            "fallback": False,
-            "total_amount": total_amount,
-            "korean_amount": korean_amount,
-        }
+    # ──────────────────────────────────────────────────────────────
+    # Internal: validation + helpers
+    # ──────────────────────────────────────────────────────────────
+    def _validate_input(self, doc_type: str, user_input: Dict) -> List[str]:
+        """Return list of human-readable warnings for missing/weak input."""
+        warnings = []
+        if not doc_type or not str(doc_type).strip():
+            warnings.append("문서 유형이 비어 있습니다.")
+        missing = [f for f in self.REQUIRED_FIELDS
+                   if not str(user_input.get(f, "") or "").strip()]
+        if missing:
+            label = {"purpose": "주요 내용", "date": "일시"}
+            names = ", ".join(label.get(m, m) for m in missing)
+            warnings.append(f"필수 입력이 비어 있습니다: {names}. "
+                            f"입력이 부족하면 초안 품질이 낮아질 수 있습니다.")
+        return warnings
 
     def _compute_total(self, user_input: Dict) -> int:
-        """Compute total amount from either unit_cost*count or explicit total."""
         if "total_amount" in user_input and user_input["total_amount"]:
             try:
                 return int(user_input["total_amount"])
@@ -204,7 +338,7 @@ class LLMClient:
         return "\n".join(lines)
 
     def _template_fallback(self, doc_type: str, u: Dict, total: int, korean: str) -> str:
-        """Used when API key is missing. Pattern-based generation."""
+        """Pattern-based generation when API is unavailable."""
         project = u.get("project", "2025년 울산 빅데이터센터 운영")
         date = u.get("date", "")
         location = u.get("location", "")
@@ -241,13 +375,17 @@ class LLMClient:
 
 if __name__ == "__main__":
     client = LLMClient()
-    print(f"API available: {client.is_available()}")
-    print(f"Model: {client.model_name}")
-    print(f"Korean number test: 225000 -> {number_to_korean(225000)}")
-    print(f"                    1040000 -> {number_to_korean(1040000)}")
-    print(f"                    150000 -> {number_to_korean(150000)}")
+    print(f"API available : {client.is_available()}")
+    print(f"Model chain   : {' -> '.join(client.model_chain)}")
+    print(f"Korean number : 225000 -> {number_to_korean(225000)}")
+    print(f"                1040000 -> {number_to_korean(1040000)}")
+    print(f"                150000 -> {number_to_korean(150000)}")
 
-    # Test
+    # Validation test: empty input should produce warnings
+    empty_result = client.generate_draft("회의비 지출(식대)", {}, [])
+    print(f"\n[Validation test] warnings: {empty_result.get('warnings')}")
+
+    # Full test
     result = client.generate_draft(
         doc_type="회의비 지출(식대)",
         user_input={
@@ -263,5 +401,6 @@ if __name__ == "__main__":
         retrieved_docs=[],
     )
     print("\n" + "=" * 60)
-    print(f"Mode: {result['model']}")
-    print(result["draft"])
+    print(f"Mode      : {result['model']}")
+    print(f"Truncated : {result.get('truncated')}")
+    print(result["draft"][:800])
