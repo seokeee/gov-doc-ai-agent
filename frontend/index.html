@@ -683,10 +683,22 @@
   <!-- ─── Panel: Draft ─── -->
   <section class="panel" id="panel-draft">
     <h2 class="section-title">공문 초안 생성</h2>
-    <p class="section-sub">RAG · 유사 문서 검색 → LLM 초안 생성 → 자동 검증까지 파이프라인 실행</p>
+    <p class="section-sub">STEP 01에서 참조 문서를 선택하면 해당 유형에 필요한 항목만 표시됩니다 · 직접 입력도 가능</p>
+
+    <!-- v2: Reference document banner -->
+    <div id="refBanner" style="display:none; margin-bottom:20px; padding:14px 18px; background: var(--cream, #F0EAD6); border-left: 4px solid var(--accent, #8B1E1E);">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+        <div>
+          <div style="font-family:var(--mono); font-size:10px; letter-spacing:0.12em; color:var(--accent,#8B1E1E); font-weight:bold; margin-bottom:4px;">REFERENCE DOCUMENT · 참조 문서</div>
+          <div id="refBannerName" style="font-weight:600; font-size:14px;"></div>
+          <div id="refBannerHint" style="font-size:12px; color:var(--info,#475569); margin-top:4px;">이 문서를 1순위 참고 자료로 사용하여 초안을 생성합니다. 아래 값은 참조 문서에서 자동 추출되었으니 바뀐 부분만 수정하세요.</div>
+        </div>
+        <button class="secondary" id="refClearBtn" style="white-space:nowrap;">✕ 선택 해제</button>
+      </div>
+    </div>
 
     <div class="form-grid">
-      <div>
+      <div id="field-doc_type">
         <label>문서 유형</label>
         <select id="draftType">
           <option>회의비 지출(식대)</option>
@@ -695,9 +707,10 @@
           <option>인쇄비용 지출</option>
           <option>검증수수료 지출</option>
           <option>출장비 지출</option>
+          <option>기타 비용 지출</option>
         </select>
       </div>
-      <div>
+      <div id="field-payment_method">
         <label>지급방법</label>
         <select id="draftPayment">
           <option>카드결제</option>
@@ -705,35 +718,43 @@
           <option>청구에 의한 계좌이체</option>
         </select>
       </div>
-      <div class="full">
-        <label>주요 내용 / 목적</label>
+      <div class="full" id="field-purpose">
+        <label id="label-purpose">주요 내용 / 목적</label>
         <input type="text" id="draftPurpose" placeholder="예) 빅데이터 분석 킥오프 미팅">
       </div>
-      <div>
-        <label>일시</label>
+      <div id="field-date">
+        <label id="label-date">일시</label>
         <input type="text" id="draftDate" placeholder="2026.1.20.(화) 12:00">
       </div>
-      <div>
-        <label>장소</label>
+      <div id="field-location">
+        <label id="label-location">장소</label>
         <input type="text" id="draftLocation" placeholder="연구원 3층 회의실">
       </div>
-      <div class="full">
-        <label>참석자</label>
+      <div class="full" id="field-participants">
+        <label id="label-participants">참석자</label>
         <input type="text" id="draftParticipants" placeholder="홍길동(울산시), 김상락, 이상일(URI)">
       </div>
-      <div class="triple">
-        <div>
-          <label>참석 인원 (명)</label>
+      <div class="triple" id="row-amounts">
+        <div id="field-participant_count">
+          <label id="label-participant_count">참석 인원 (명)</label>
           <input type="number" id="draftCount" placeholder="8">
         </div>
-        <div>
-          <label>1인당 단가 (원)</label>
+        <div id="field-unit_cost">
+          <label id="label-unit_cost">1인당 단가 (원)</label>
           <input type="number" id="draftUnit" placeholder="25000">
         </div>
-        <div>
-          <label>프로젝트</label>
-          <input type="text" id="draftProject" value="2025년 울산 빅데이터센터 운영">
+        <div id="field-total_amount">
+          <label id="label-total_amount">총 지출금액 (원)</label>
+          <input type="number" id="draftTotal" placeholder="단가×인원 자동 또는 직접 입력">
         </div>
+      </div>
+      <div id="field-payee">
+        <label id="label-payee">지급처</label>
+        <input type="text" id="draftPayee" placeholder="예) ○○인쇄, ○○회계법인">
+      </div>
+      <div id="field-project">
+        <label>프로젝트</label>
+        <input type="text" id="draftProject" value="2025년 울산 빅데이터센터 운영">
       </div>
       <div class="amount-preview" id="amountPreview" style="display: none;">
         산출 총액 : <strong id="amountTotal">0원</strong><span class="korean" id="amountKorean"></span>
@@ -869,7 +890,8 @@ function numToKorean(num) {
 function updateAmount() {
   const count = parseInt(document.getElementById('draftCount').value) || 0;
   const unit = parseInt(document.getElementById('draftUnit').value) || 0;
-  const total = count * unit;
+  const direct = parseInt(document.getElementById('draftTotal').value) || 0;
+  const total = direct > 0 ? direct : count * unit;
   const preview = document.getElementById('amountPreview');
   if (total > 0) {
     preview.style.display = 'block';
@@ -879,7 +901,7 @@ function updateAmount() {
     preview.style.display = 'none';
   }
 }
-['draftCount', 'draftUnit'].forEach(id => {
+['draftCount', 'draftUnit', 'draftTotal'].forEach(id => {
   document.getElementById(id).addEventListener('input', updateAmount);
 });
 
@@ -892,7 +914,7 @@ function renderSearchResult(r, i) {
   const score = r.hybrid_score || r.score;
   const scoreClass = score > 0.5 ? 'high' : score > 0.2 ? 'mid' : '';
   return `
-    <div class="result-card" data-idx="${i}">
+    <div class="result-card" data-idx="${i}" data-filename="${escapeHTML(r.filename)}">
       <div class="card-head">
         <div>
           <div class="card-meta" style="margin-bottom: 8px;">
@@ -902,7 +924,13 @@ function renderSearchResult(r, i) {
           <div class="card-title">${escapeHTML(r.title || '(제목 없음)')}</div>
           <div class="card-sub">${escapeHTML(r.purpose || '')} · ${escapeHTML(r.amount || '')} · ${escapeHTML(r.date || '일시 없음')}</div>
         </div>
-        <div class="score-badge ${scoreClass}">SIM ${(score * 100).toFixed(1)}%</div>
+        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
+          <div class="score-badge ${scoreClass}">SIM ${(score * 100).toFixed(1)}%</div>
+          <button class="primary use-ref-btn" data-filename="${escapeHTML(r.filename)}"
+                  style="font-size:11px; padding:6px 14px; white-space:nowrap;">
+            ✎ 이 문서로 초안 작성
+          </button>
+        </div>
       </div>
       <div class="card-body" style="display: none;">${escapeHTML(r.raw_text || r.summary || '')}</div>
     </div>
@@ -935,6 +963,14 @@ document.getElementById('searchBtn').addEventListener('click', async () => {
         body.style.display = card.classList.contains('expanded') ? 'block' : 'none';
       });
     });
+
+    // v2: "이 문서로 초안 작성" buttons (stop propagation so card doesn't toggle)
+    target.querySelectorAll('.use-ref-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await selectReferenceDoc(btn.dataset.filename);
+      });
+    });
   } catch (e) {
     target.innerHTML = `<div class="empty-state" style="color: var(--err);">에러: ${escapeHTML(e.message)}</div>`;
   }
@@ -945,6 +981,104 @@ document.getElementById('searchInput').addEventListener('keydown', e => {
 });
 
 // ─── Draft generation ─────────────────────────────────
+
+// v2: Reference document state + dynamic form
+let selectedReference = null;  // { filename, doc_type, fields, reference }
+
+const ALL_FIELD_IDS = ['purpose','date','location','participants',
+                       'participant_count','unit_cost','total_amount','payee'];
+const FIELD_INPUT_MAP = {
+  purpose: 'draftPurpose', date: 'draftDate', location: 'draftLocation',
+  participants: 'draftParticipants', participant_count: 'draftCount',
+  unit_cost: 'draftUnit', total_amount: 'draftTotal', payee: 'draftPayee',
+};
+
+function showAllFields() {
+  ALL_FIELD_IDS.forEach(k => {
+    const el = document.getElementById(`field-${k}`);
+    if (el) el.style.display = '';
+  });
+}
+
+function applyFieldSchema(fields) {
+  // Hide all schema-controlled fields, then show only those in the schema
+  ALL_FIELD_IDS.forEach(k => {
+    const el = document.getElementById(`field-${k}`);
+    if (el) el.style.display = 'none';
+  });
+  fields.forEach(f => {
+    const wrap = document.getElementById(`field-${f.key}`);
+    if (!wrap) return;
+    wrap.style.display = '';
+    const label = document.getElementById(`label-${f.key}`);
+    if (label) label.textContent = f.label + (f.required ? ' *' : '');
+  });
+}
+
+async function selectReferenceDoc(filename) {
+  try {
+    const data = await api(`/api/doc-fields/${encodeURIComponent(filename)}`);
+    selectedReference = data;
+
+    // Banner
+    document.getElementById('refBanner').style.display = 'block';
+    document.getElementById('refBannerName').textContent =
+      `${data.filename} — ${data.doc_type}`;
+
+    // Doc type select (add option if missing)
+    const typeSel = document.getElementById('draftType');
+    if (![...typeSel.options].some(o => o.value === data.doc_type)) {
+      const opt = document.createElement('option');
+      opt.textContent = data.doc_type;
+      typeSel.appendChild(opt);
+    }
+    typeSel.value = data.doc_type;
+
+    // Dynamic fields per schema
+    applyFieldSchema(data.fields);
+
+    // Pre-fill from reference values (text fields filled, numbers as placeholder)
+    const ref = data.reference || {};
+    const setVal = (id, v) => { const el = document.getElementById(id); if (el && v) el.value = v; };
+    const setPh  = (id, v) => { const el = document.getElementById(id); if (el && v) el.placeholder = `참조: ${v}`; };
+    setVal('draftPurpose', ref.purpose);
+    setVal('draftDate', ref.date);
+    setVal('draftLocation', ref.location);
+    setVal('draftParticipants', ref.participants);
+    setVal('draftPayee', ref.payee);
+    if (ref.payment_method) {
+      const paySel = document.getElementById('draftPayment');
+      const match = [...paySel.options].find(o => ref.payment_method.includes(o.value));
+      if (match) paySel.value = match.value;
+    }
+    if (ref.project_name) setVal('draftProject', ref.project_name);
+    if (ref.amount_num) setPh('draftTotal', `${Number(ref.amount_num).toLocaleString()}원`);
+
+    // Switch to STEP 02 tab
+    document.querySelector('[data-tab="draft"]').click();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  } catch (e) {
+    alert(`참조 문서 분석 실패: ${e.message}`);
+  }
+}
+
+function clearReference() {
+  selectedReference = null;
+  document.getElementById('refBanner').style.display = 'none';
+  showAllFields();
+  // Reset labels to defaults
+  const defaults = {
+    purpose: '주요 내용 / 목적', date: '일시', location: '장소',
+    participants: '참석자', participant_count: '참석 인원 (명)',
+    unit_cost: '1인당 단가 (원)', total_amount: '총 지출금액 (원)', payee: '지급처',
+  };
+  Object.entries(defaults).forEach(([k, v]) => {
+    const label = document.getElementById(`label-${k}`);
+    if (label) label.textContent = v;
+  });
+}
+document.getElementById('refClearBtn').addEventListener('click', clearReference);
+
 function renderPipelineStep(step) {
   const statusClass = step.status || 'done';
   const icon = statusClass === 'running' ? '…' : statusClass === 'done' ? '✓' : '✗';
@@ -972,11 +1106,14 @@ document.getElementById('generateBtn').addEventListener('click', async () => {
       participants: document.getElementById('draftParticipants').value,
       participant_count: parseInt(document.getElementById('draftCount').value) || null,
       unit_cost: parseInt(document.getElementById('draftUnit').value) || null,
+      total_amount: parseInt(document.getElementById('draftTotal').value) || null,
+      payee: document.getElementById('draftPayee').value || null,
       payment_method: document.getElementById('draftPayment').value,
       project: document.getElementById('draftProject').value,
     },
     top_k: 3,
     verify: true,
+    reference_filename: selectedReference ? selectedReference.filename : null,
   };
 
   const pipeline = document.getElementById('pipeline');
@@ -1008,7 +1145,7 @@ document.getElementById('generateBtn').addEventListener('click', async () => {
           <div class="retrieved-title">RETRIEVED CONTEXT · RAG 입력 문서</div>
           ${retrievedDocs.map(d => `
             <div class="retrieved-item">
-              <span>▸ ${escapeHTML(d.filename)} — ${escapeHTML(d.title || d.doc_type)}</span>
+              <span>${d.pinned ? '📌' : '▸'} ${escapeHTML(d.filename)} — ${escapeHTML(d.title || d.doc_type)}${d.pinned ? ' <strong style="color:var(--accent,#8B1E1E);">(참조 문서)</strong>' : ''}</span>
               <span class="retrieved-score">${(d.hybrid_score * 100).toFixed(1)}%</span>
             </div>
           `).join('')}

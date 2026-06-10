@@ -24,7 +24,75 @@ class GovDocAgent:
     Two workflows:
       1. ingest(pdf_dir)   — process PDFs into searchable index (one-time setup)
       2. generate(input)   — RAG search + draft + verify (per request)
+
+    Reference-document workflow (v2):
+      - get_doc_fields(filename) — analyze a selected document and return
+        the input fields needed for that doc type + reference values
+      - generate(reference_filename=...) — pin the selected doc as the
+        primary RAG context document
     """
+
+    # ─── Field schemas per doc type ───────────────────────────────────
+    # Defines which input fields the UI should ask for, per document type.
+    # key   : UserInput field name (matches api_server.py schema)
+    # label : Korean label shown in UI
+    # required : minimal fields for a meaningful draft
+    FIELD_SCHEMAS = {
+        "회의비 지출(식대)": [
+            {"key": "purpose",           "label": "주요 내용 / 목적", "required": True},
+            {"key": "date",              "label": "일시",             "required": True},
+            {"key": "location",          "label": "장소",             "required": False},
+            {"key": "participants",      "label": "참석자",           "required": False},
+            {"key": "participant_count", "label": "참석 인원 (명)",   "required": True},
+            {"key": "unit_cost",         "label": "1인당 단가 (원)",  "required": True},
+            {"key": "payment_method",    "label": "지급방법",         "required": False},
+        ],
+        "자문회의 비용 지출": [
+            {"key": "purpose",           "label": "자문 주제 / 내용", "required": True},
+            {"key": "date",              "label": "일시",             "required": True},
+            {"key": "location",          "label": "장소",             "required": False},
+            {"key": "participants",      "label": "자문위원 / 참석자","required": True},
+            {"key": "participant_count", "label": "참석 인원 (명)",   "required": False},
+            {"key": "unit_cost",         "label": "1인당 자문료 (원)","required": False},
+            {"key": "total_amount",      "label": "총 지출금액 (원)", "required": False},
+            {"key": "payment_method",    "label": "지급방법",         "required": False},
+        ],
+        "세미나 비용 지출": [
+            {"key": "purpose",           "label": "세미나 주제",      "required": True},
+            {"key": "date",              "label": "일시",             "required": True},
+            {"key": "location",          "label": "장소",             "required": False},
+            {"key": "participants",      "label": "발표자 / 참석자",  "required": False},
+            {"key": "total_amount",      "label": "총 지출금액 (원)", "required": True},
+            {"key": "payment_method",    "label": "지급방법",         "required": False},
+        ],
+        "인쇄비용 지출": [
+            {"key": "purpose",           "label": "인쇄 내역 (보고서명 등)", "required": True},
+            {"key": "total_amount",      "label": "총 지출금액 (원)", "required": True},
+            {"key": "payee",             "label": "지급처 (인쇄업체)","required": True},
+            {"key": "payment_method",    "label": "지급방법",         "required": False},
+        ],
+        "검증수수료 지출": [
+            {"key": "purpose",           "label": "검증 대상 (정산보고서 등)", "required": True},
+            {"key": "total_amount",      "label": "총 지출금액 (원)", "required": True},
+            {"key": "payee",             "label": "지급처 (회계법인)","required": True},
+            {"key": "payment_method",    "label": "지급방법",         "required": False},
+        ],
+        "출장비 지출": [
+            {"key": "purpose",           "label": "출장 목적",        "required": True},
+            {"key": "date",              "label": "출장 기간",        "required": True},
+            {"key": "location",          "label": "출장지",           "required": True},
+            {"key": "participants",      "label": "출장자",           "required": True},
+            {"key": "total_amount",      "label": "총 지출금액 (원)", "required": False},
+            {"key": "payment_method",    "label": "지급방법",         "required": False},
+        ],
+        "기타 비용 지출": [
+            {"key": "purpose",           "label": "지출 내역 / 목적", "required": True},
+            {"key": "date",              "label": "일시",             "required": False},
+            {"key": "total_amount",      "label": "총 지출금액 (원)", "required": True},
+            {"key": "payee",             "label": "지급처",           "required": False},
+            {"key": "payment_method",    "label": "지급방법",         "required": False},
+        ],
+    }
 
     def __init__(
         self,
@@ -132,6 +200,51 @@ class GovDocAgent:
         except (FileNotFoundError, IOError):
             return False
 
+    # ─── Reference document workflow (v2) ─────────────────────────────
+    def find_doc(self, filename: str) -> Optional[Dict]:
+        """Find a parsed document by filename."""
+        for doc in self.parsed_docs:
+            if doc.get("filename") == filename:
+                return doc
+        return None
+
+    def get_doc_fields(self, filename: str) -> Optional[Dict]:
+        """
+        Analyze a selected reference document and return:
+          - doc_type      : classified document type
+          - fields        : input field schema for this doc type
+          - reference     : the reference doc's parsed values (for pre-fill)
+        Returns None if document not found.
+        """
+        doc = self.find_doc(filename)
+        if doc is None:
+            return None
+
+        doc_type = doc.get("doc_type", "기타 비용 지출")
+        schema = self.FIELD_SCHEMAS.get(doc_type, self.FIELD_SCHEMAS["기타 비용 지출"])
+
+        # Reference values for pre-fill (parsed from the actual PDF)
+        reference = {
+            "title": doc.get("title", ""),
+            "purpose": doc.get("purpose", ""),
+            "date": doc.get("date", ""),
+            "location": doc.get("location", ""),
+            "participants": doc.get("participants", ""),
+            "payment_method": doc.get("payment_method", ""),
+            "payee": doc.get("payee", ""),
+            "amount_text": doc.get("amount_text", ""),
+            "amount_num": doc.get("amount_num", 0),
+            "budget_category": doc.get("budget_category", ""),
+            "project_name": doc.get("project_name", ""),
+        }
+
+        return {
+            "filename": filename,
+            "doc_type": doc_type,
+            "fields": schema,
+            "reference": reference,
+        }
+
     # ─── Workflow 2: Draft generation ─────────────────────────────────
     def generate(
         self,
@@ -139,11 +252,13 @@ class GovDocAgent:
         user_input: Dict,
         top_k: int = 3,
         verify: bool = True,
+        reference_filename: Optional[str] = None,
         on_progress: Optional[Callable[[Dict], None]] = None,
     ) -> Dict:
         """
         Full pipeline for drafting a new 공문서:
           1. Retrieve similar docs (semantic + keyword hybrid search)
+             — if reference_filename given, that doc is pinned as context #1
           2. Generate draft via LLM with RAG context
           3. Verify draft (spelling, structure, numerics)
         """
@@ -169,11 +284,28 @@ class GovDocAgent:
             query_parts.append(user_input["payment_method"])
         query = " ".join(query_parts)
 
-        retrieved = self.vector.hybrid_search(query, top_k=top_k)
+        # Reference doc pinning: selected doc becomes context #1,
+        # remaining slots filled from hybrid search (excluding the pinned doc)
+        pinned = None
+        if reference_filename:
+            ref_doc = self.find_doc(reference_filename)
+            if ref_doc is not None:
+                pinned = {"doc": ref_doc, "score": 1.0, "hybrid_score": 1.0,
+                          "pinned": True}
+
+        if pinned:
+            searched = self.vector.hybrid_search(query, top_k=top_k + 1)
+            others = [r for r in searched
+                      if r["doc"].get("filename") != reference_filename]
+            retrieved = [pinned] + others[: max(top_k - 1, 0)]
+        else:
+            retrieved = self.vector.hybrid_search(query, top_k=top_k)
+
         elapsed_retrieval = round(time.time() - t, 3)
 
+        result["reference_filename"] = reference_filename
         result["steps"].append({
-            "name": "유사 문서 검색",
+            "name": "유사 문서 검색" + (" (참조 문서 고정)" if pinned else ""),
             "elapsed_sec": elapsed_retrieval,
             "backend": self.vector.backend,
             "retrieved": [
@@ -183,6 +315,7 @@ class GovDocAgent:
                     "doc_type": r["doc"].get("doc_type", ""),
                     "score": round(r["score"], 4),
                     "hybrid_score": round(r.get("hybrid_score", r["score"]), 4),
+                    "pinned": r.get("pinned", False),
                 }
                 for r in retrieved
             ],

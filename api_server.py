@@ -47,6 +47,7 @@ class GenerateRequest(BaseModel):
     user_input: UserInput
     top_k: int = 3
     verify: bool = True
+    reference_filename: Optional[str] = None  # v2: pin selected doc as RAG context #1
 
 
 class VerifyRequest(BaseModel):
@@ -141,6 +142,20 @@ async def search(req: SearchRequest):
     }
 
 
+@app.get("/api/doc-fields/{filename}")
+async def doc_fields(filename: str):
+    """
+    v2: Analyze a selected reference document.
+    Returns the input field schema for its doc type + reference values for pre-fill.
+    """
+    if not _ingested:
+        raise HTTPException(status_code=400, detail="No index loaded. Run POST /api/ingest first.")
+    result = agent.get_doc_fields(filename)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Document not found: {filename}")
+    return result
+
+
 @app.post("/api/generate")
 async def generate(req: GenerateRequest):
     if not _ingested:
@@ -152,6 +167,7 @@ async def generate(req: GenerateRequest):
         user_input=user_input,
         top_k=req.top_k,
         verify=req.verify,
+        reference_filename=req.reference_filename,
     )
     return result
 
