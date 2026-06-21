@@ -37,8 +37,18 @@ REQUIRED_FIELDS = {
 }
 
 # Document structure rules
+# NOTE: '끝.' detection is handled specially in _check_structure (see _has_closing_mark)
+# because Korean official documents place '끝.' at the END OF THE BODY, after which
+# 시행정보(시행 ...), 주소/연락처, 결재라인 등이 따라올 수 있다.
 STRUCTURE_RULES = [
-    ("문서 끝 표시", r"끝\s*\.?\s*$", "공문서는 '끝.' 표시로 마무리해야 합니다", "info"),
+]
+
+# Markers that legitimately appear AFTER the body's '끝.' in real 공문서.
+# If '끝.' is followed only by these, the closing mark is considered valid.
+POST_BODY_MARKERS = [
+    "시행", "접수", "우편번호", "우 ", "전화", "전송", "이메일", "공개",
+    "예상 결재라인", "결재라인", "기안", "검토", "협조", "결재",
+    "www.", "http", "@", "연구실-", "재가",
 ]
 
 
@@ -116,6 +126,8 @@ class DocumentVerifier:
 
     def _check_structure(self, text: str) -> List[Dict]:
         issues = []
+
+        # Generic structure rules (currently none beyond closing mark)
         for name, pattern, desc, severity in STRUCTURE_RULES:
             if not re.search(pattern, text.strip()):
                 issues.append({
@@ -126,7 +138,54 @@ class DocumentVerifier:
                     "description": f"구조 규칙: {name}",
                     "position": -1,
                 })
+
+        # Closing mark ('끝.') — special handling
+        if not self._has_closing_mark(text):
+            issues.append({
+                "type": "structure",
+                "severity": "info",
+                "found": None,
+                "suggestion": "공문서는 본문 마지막에 '끝.' 표시로 마무리해야 합니다",
+                "description": "구조 규칙: 문서 끝 표시",
+                "position": -1,
+            })
+
         return issues
+
+    def _has_closing_mark(self, text: str) -> bool:
+        """
+        Check whether the document has a valid '끝.' closing mark.
+
+        Korean official documents place '끝.' at the end of the BODY. After it,
+        post-body elements (시행정보, 주소/연락처, 결재라인 등) may follow.
+        So '끝.' is valid if:
+          (a) it appears at the very end of the text, OR
+          (b) everything after the LAST '끝.' consists only of post-body markers.
+        """
+        # Find all '끝' followed by optional period
+        matches = list(re.finditer(r"끝\s*\.?", text))
+        if not matches:
+            return False
+
+        # Use the last occurrence as the candidate closing mark
+        last = matches[-1]
+        tail = text[last.end():].strip()
+
+        # (a) Nothing meaningful after '끝.' -> valid
+        if not tail:
+            return True
+
+        # (b) Everything after '끝.' is post-body content -> still valid
+        for line in tail.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if not any(marker in line for marker in POST_BODY_MARKERS):
+                # Found a content line that isn't a recognized post-body marker.
+                # Be lenient: short lines (likely names/dates in 결재라인) pass too.
+                if len(line) > 25:
+                    return False
+        return True
 
     def _check_numeric_consistency(
         self,
